@@ -15,7 +15,7 @@
   ],
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "description": "FamilySearch MCP server using browser session authentication",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.7.0",
