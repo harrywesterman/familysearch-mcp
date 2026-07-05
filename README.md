@@ -25,7 +25,7 @@ FamilySearch does not approve direct API access for most personal projects. This
 ### 1. Clone and build
 
 ```bash
-git clone https://github.com/your-username/familysearch-mcp.git
+git clone https://github.com/JonathanReiss15/familysearch-mcp.git
 cd familysearch-mcp
 npm install
 npm run build
