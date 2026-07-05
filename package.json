@@ -1,0 +1,29 @@
+{
+  "name": "familysearch",
+  "version": "2.0.0",
+  "main": "build/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node ./build/index.js",
+    "login": "node ./scripts/browser-login.mjs",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "files": [
+    "build",
+    "scripts"
+  ],
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "FamilySearch MCP server using browser session authentication",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.7.0",
+    "playwright": "^1.51.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.11",
+    "typescript": "^5.8.2"
+  }
+}
