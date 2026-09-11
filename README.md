@@ -204,11 +204,11 @@ The full cookie string is required — bot protection cookies like `reese84` and
 | `login-with-browser` | Open Brave, log in, and save session locally |
 | `set-session-cookie` | Authenticate by pasting cookies from your browser |
 | `get-current-user` | View your authenticated account info |
-| `search-persons` | Search individuals in the Family Tree |
-| `get-person` | Get details for a person by ID |
+| `search-persons` | Search individuals in the Family Tree (name, givenName/surname, dates, places, gender, limit/offset) |
+| `get-person` | Get details for a person by ID, including parents, spouses, children and notes |
 | `get-ancestors` | View ancestors (default 4 generations, max 8) |
 | `get-descendants` | View descendants (default 2 generations, max 3) |
-| `search-records` | Search historical record collections |
+| `search-records` | Search historical record collections (date ranges, gender, limit/offset; returns the record `ark` link) |
 
 ### Example prompts
 
@@ -236,12 +236,23 @@ Search historical records for surname "Reiss" in "Pennsylvania"
 |---|---|
 | "Not authenticated" errors | Run `npm run login` or use `set-session-cookie` |
 | Session expired / 401 errors | Re-run `npm run login` |
-| "Request blocked by FamilySearch security (error 15)" | Re-run `npm run login` to refresh bot-protection cookies |
+| "Request blocked by FamilySearch security (error 15)" | Re-run `npm run login` to refresh bot-protection cookies, then wait a few minutes before retrying. Repeated requests prolong the block |
 | Brave not found | Install [Brave](https://brave.com/download/) or set `BRAVE_PATH` to your Brave executable |
 | MCP tools not appearing | Confirm `npm run build` succeeded and restart your MCP client |
 | `node` not found | Use the full path to your Node binary in the MCP config |
 
 ---
+
+## Rate limiting
+
+FamilySearch's security service blocks clients that issue requests too quickly
+(`error 15`). This server mitigates that by:
+
+- throttling every request (default: at least ~1.1s between calls)
+- retrying transient failures (HTTP 429/5xx and network errors) with exponential backoff
+
+Error 15 is a hard bot-protection block and is **not** retried automatically — if you
+see it, refresh your session with `npm run login` and wait a few minutes.
 
 ## Security
 

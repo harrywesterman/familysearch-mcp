@@ -87,7 +87,7 @@ async function main() {
   }
 
   console.error(`Opening Brave for FamilySearch login (${bravePath})...`);
-  console.error('Sign in at familysearch.org. This window waits until you are fully logged in (up to 5 minutes).');
+  console.error('Sign in at familysearch.org. This window waits until you are fully logged in (up to 15 minutes).');
 
   const context = await chromium.launchPersistentContext(braveProfileDir, {
     executablePath: bravePath,
@@ -115,7 +115,7 @@ async function main() {
           return false;
         }
       },
-      { timeout: 5 * 60 * 1000 },
+      { timeout: 15 * 60 * 1000 },
     );
   } catch {
     console.error('Timed out waiting for login.');

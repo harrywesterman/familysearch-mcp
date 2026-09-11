@@ -9,6 +9,7 @@ import {
   FamilySearchSessionClient,
   FamilySearchSessionError,
   formatCardBirthDeath,
+  formatPersonSummary,
 } from './session-client.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -44,6 +45,16 @@ function formatError(error: unknown): string {
     return error.message;
   }
   return JSON.stringify(error);
+}
+
+function formatNote(note: unknown): string | null {
+  if (typeof note === 'string') return note;
+  if (note && typeof note === 'object') {
+    const record = note as Record<string, unknown>;
+    const text = record.text ?? record.content ?? record.value;
+    if (typeof text === 'string') return text;
+  }
+  return null;
 }
 
 function extractCookieValue(cookieHeader: string, name: string): string {
@@ -190,13 +201,16 @@ server.tool(
   'search-persons',
   'Search for person records in FamilySearch',
   {
-    name: z.string().optional().describe('Name to search for'),
+    name: z.string().optional().describe('Full name (split into given name + surname when givenName/surname are omitted)'),
+    givenName: z.string().optional().describe('Given name(s); preferred over "name" for exact control'),
+    surname: z.string().optional().describe('Surname/last name; preferred over "name" for exact control'),
     birthDate: z.string().optional().describe('Birth date (YYYY-MM-DD)'),
     birthPlace: z.string().optional().describe('Birth place'),
     deathDate: z.string().optional().describe('Death date (YYYY-MM-DD)'),
     deathPlace: z.string().optional().describe('Death place'),
     gender: z.enum(['MALE', 'FEMALE']).optional().describe('Gender'),
     limit: z.number().optional().describe('Maximum number of results (default: 10)'),
+    offset: z.number().optional().describe('Result offset for pagination (default: 0)'),
   },
   async (params) => {
     if (!isAuthenticated()) {
@@ -237,18 +251,49 @@ server.tool(
     }
 
     try {
-      const { card } = await sessionClient.getPersonDetails(personId);
+      const { card, notes, family } = await sessionClient.getPersonDetails(personId);
       const gender = card.gender || card.genderConclusion?.details?.gender || 'Unknown';
       const { birth, death } = formatCardBirthDeath(card);
 
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Person Details:\nID: ${personId}\nName: ${card.name || 'Unknown'}\nGender: ${gender}\nLifespan: ${card.lifespan || 'Unknown'}\nBirth: ${birth}\nDeath: ${death}`,
-          },
-        ],
-      };
+      const lines = [
+        'Person Details:',
+        `ID: ${personId}`,
+        `Name: ${card.name || 'Unknown'}`,
+        `Gender: ${gender}`,
+        `Lifespan: ${card.lifespan || 'Unknown'}`,
+        `Birth: ${birth}`,
+        `Death: ${death}`,
+      ];
+
+      const parents = new Set<string>();
+      for (const group of family.parents || []) {
+        if (group.parent1) parents.add(formatPersonSummary(group.parent1));
+        if (group.parent2) parents.add(formatPersonSummary(group.parent2));
+      }
+      if (parents.size) {
+        lines.push('', `Parents:\n${[...parents].map((p) => `  - ${p}`).join('\n')}`);
+      }
+
+      const spouseLines: string[] = [];
+      for (const group of family.spouses || []) {
+        const spouse = group.spouse1?.id === personId ? group.spouse2 : group.spouse1;
+        if (spouse) {
+          spouseLines.push(`  - ${formatPersonSummary(spouse)}`);
+          for (const child of group.children || []) {
+            spouseLines.push(`      child: ${formatPersonSummary(child)}`);
+          }
+        }
+      }
+      if (spouseLines.length) {
+        lines.push('', `Spouses & children:\n${spouseLines.join('\n')}`);
+      }
+
+      const noteTexts = notes.map(formatNote).filter((note): note is string => Boolean(note));
+      if (noteTexts.length) {
+        lines.push('', `Notes:\n${noteTexts.map((note) => `  - ${note}`).join('\n')}`);
+      }
+
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Error fetching person details: ${formatError(error)}` }] };
     }
@@ -317,12 +362,16 @@ server.tool(
   {
     givenName: z.string().optional().describe('Given name'),
     surname: z.string().optional().describe('Surname/last name'),
-    birthDate: z.string().optional().describe('Birth date (YYYY-MM-DD)'),
+    birthDate: z.string().optional().describe('Birth date from (YYYY-MM-DD)'),
+    birthDateTo: z.string().optional().describe('Birth date to (YYYY-MM-DD)'),
     birthPlace: z.string().optional().describe('Birth place'),
-    deathDate: z.string().optional().describe('Death date (YYYY-MM-DD)'),
+    deathDate: z.string().optional().describe('Death date from (YYYY-MM-DD)'),
+    deathDateTo: z.string().optional().describe('Death date to (YYYY-MM-DD)'),
     deathPlace: z.string().optional().describe('Death place'),
+    gender: z.enum(['MALE', 'FEMALE']).optional().describe('Gender'),
     collectionId: z.string().optional().describe('Specific collection ID to search in'),
     limit: z.number().optional().describe('Maximum number of results (default: 10)'),
+    offset: z.number().optional().describe('Result offset for pagination (default: 0)'),
   },
   async (params) => {
     if (!isAuthenticated()) {
@@ -338,7 +387,8 @@ server.tool(
       const resultsText = records
         .map(
           (record, index) =>
-            `${index + 1}. ${record.name} (${record.id})\n   Gender: ${record.gender}\n   Birth: ${record.birth}\n   Death: ${record.death}\n   Collection: ${record.collection}`,
+            `${index + 1}. ${record.name} (${record.id})\n   Gender: ${record.gender}\n   Birth: ${record.birth}\n   Death: ${record.death}\n   Collection: ${record.collection}` +
+            (record.ark ? `\n   Record: ${record.ark}` : ''),
         )
         .join('\n\n');
 
