@@ -6,7 +6,7 @@
  * Usage: npm run login
  */
 import { chromium } from 'playwright';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir, platform } from 'os';
 import { join } from 'path';
 
@@ -45,9 +45,11 @@ function loadConfig() {
 
 function saveConfig(config) {
   if (!existsSync(configDir)) {
-    mkdirSync(configDir, { recursive: true });
+    mkdirSync(configDir, { recursive: true, mode: 0o700 });
   }
-  writeFileSync(configPath, JSON.stringify(config, null, 2));
+  chmodSync(configDir, 0o700);
+  writeFileSync(configPath, JSON.stringify(config, null, 2), { mode: 0o600 });
+  chmodSync(configPath, 0o600);
 }
 
 function readLoggedInUser(page) {

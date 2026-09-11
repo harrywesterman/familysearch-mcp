@@ -209,6 +209,7 @@ The full cookie string is required — bot protection cookies like `reese84` and
 | `get-ancestors` | View ancestors (default 4 generations, max 8) |
 | `get-descendants` | View descendants (default 2 generations, max 3) |
 | `search-records` | Search historical record collections (date ranges, gender, limit/offset; returns the record `ark` link) |
+| `search-full-text` | Search FamilySearch AI-OCR transcripts of unindexed scans by keywords, name, place, years, DGS or collection |
 
 ### Example prompts
 
@@ -227,6 +228,14 @@ Get 4 generations of ancestors for personId G2KQ-JTH
 ```
 Search historical records for surname "Reiss" in "Pennsylvania"
 ```
+
+```
+Search the full text for "voogd" and "Leeuwarden" between 1700 and 1800
+```
+
+Full-text results include an OCR excerpt and a direct FamilySearch ARK link to the
+scan. Set `includeFullTranscript` to `true` to return the complete AI transcript;
+use a low result limit because transcripts can be large.
 
 ---
 

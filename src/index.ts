@@ -57,6 +57,19 @@ function formatNote(note: unknown): string | null {
   return null;
 }
 
+function transcriptExcerpt(text: string, highlights: string[], maxLength = 700): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+
+  const lower = normalized.toLocaleLowerCase();
+  const matchIndex = highlights
+    .map((highlight) => lower.indexOf(highlight.toLocaleLowerCase()))
+    .find((index) => index >= 0) ?? 0;
+  const start = Math.max(0, matchIndex - Math.floor(maxLength / 3));
+  const end = Math.min(normalized.length, start + maxLength);
+  return `${start > 0 ? '…' : ''}${normalized.slice(start, end)}${end < normalized.length ? '…' : ''}`;
+}
+
 function extractCookieValue(cookieHeader: string, name: string): string {
   const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
   return match?.[1] || '';
@@ -399,6 +412,66 @@ server.tool(
       };
     } catch (error) {
       return { content: [{ type: 'text', text: `Error searching records: ${formatError(error)}` }] };
+    }
+  },
+);
+
+server.tool(
+  'search-full-text',
+  'Search FamilySearch AI-generated full-text transcripts of unindexed document images',
+  {
+    keywords: z.string().optional().describe('Words or phrases anywhere in the OCR transcript; supports FamilySearch search syntax'),
+    fullName: z.string().optional().describe('Person name to find in the document'),
+    place: z.string().optional().describe('Place mentioned in or associated with the document'),
+    yearFrom: z.number().int().min(1).max(3000).optional().describe('Earliest year'),
+    yearTo: z.number().int().min(1).max(3000).optional().describe('Latest year'),
+    imageGroupNumber: z.string().optional().describe('FamilySearch DGS/image group number'),
+    collectionId: z.string().optional().describe('Restrict the search to a Full-Text collection ID'),
+    limit: z.number().int().min(1).max(20).optional().describe('Maximum results (default: 5, max: 20)'),
+    offset: z.number().int().min(0).optional().describe('Result offset for pagination (default: 0)'),
+    includeFullTranscript: z.boolean().optional().describe('Return complete OCR text instead of an excerpt; use with a low limit'),
+  },
+  async (params) => {
+    if (!isAuthenticated()) {
+      return { content: [{ type: 'text', text: authRequiredText() }] };
+    }
+    if (!params.keywords && !params.fullName && !params.place && !params.imageGroupNumber && !params.collectionId) {
+      return { content: [{ type: 'text', text: 'Provide at least one search term, place, DGS number, or collection ID.' }] };
+    }
+    if (params.yearFrom && params.yearTo && params.yearFrom > params.yearTo) {
+      return { content: [{ type: 'text', text: 'yearFrom must be less than or equal to yearTo.' }] };
+    }
+
+    try {
+      const results = await sessionClient.searchFullText(params);
+      if (!results.entries.length) {
+        return { content: [{ type: 'text', text: 'No full-text records found matching your search criteria.' }] };
+      }
+
+      const resultText = results.entries.map((entry, index) => {
+        const transcript = params.includeFullTranscript
+          ? entry.transcript
+          : transcriptExcerpt(entry.transcript, entry.highlights);
+        return [
+          `${results.offset + index + 1}. ${entry.title}`,
+          `   Image ID: ${entry.id}`,
+          `   Collection: ${entry.collectionTitle || 'Unknown'}${entry.collectionId ? ` (${entry.collectionId})` : ''}`,
+          `   Date: ${entry.recordDate}`,
+          `   Place: ${entry.recordPlace}`,
+          `   Type: ${entry.recordType}`,
+          `   Scan: ${entry.sourceUrl || 'Unavailable'}`,
+          `   OCR: ${transcript || 'No transcript returned'}`,
+        ].join('\n');
+      }).join('\n\n');
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Found ${results.total} full-text records; showing ${results.entries.length} from offset ${results.offset}:\n\n${resultText}`,
+        }],
+      };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error searching full-text records: ${formatError(error)}` }] };
     }
   },
 );

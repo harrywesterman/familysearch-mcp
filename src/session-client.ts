@@ -107,6 +107,55 @@ export interface HistoricalRecordResult {
   sourceDescriptionId: string;
 }
 
+interface FullTextEntity {
+  type?: string;
+  value?: string;
+}
+
+interface FullTextSearchEntry {
+  id?: string;
+  sourceUrl?: string;
+  collectionId?: string;
+  collectionTitle?: string;
+  content?: {
+    recordDate?: string;
+    recordType?: string;
+    recordPlace?: string;
+    title?: string;
+    textDocument?: string;
+    entities?: FullTextEntity[];
+    highlightTexts?: string[];
+  };
+}
+
+interface FullTextSearchResponse {
+  entries?: FullTextSearchEntry[];
+  index?: number;
+  results?: number;
+  links?: { next?: { href?: string } };
+}
+
+export interface FullTextSearchResult {
+  id: string;
+  title: string;
+  collectionId: string;
+  collectionTitle: string;
+  recordDate: string;
+  recordType: string;
+  recordPlace: string;
+  transcript: string;
+  highlights: string[];
+  entities: Array<{ type: string; value: string }>;
+  sourceUrl: string;
+}
+
+export interface FullTextSearchResults {
+  total: number;
+  offset: number;
+  nextUrl: string;
+  entries: FullTextSearchResult[];
+}
+
 function extractRecords(data: HrPersonasResponse): HistoricalRecordResult[] {
   const globalSources = data.gedcomx?.sourceDescriptions || [];
 
@@ -614,6 +663,55 @@ export class FamilySearchSessionClient {
 
     const data = await this.request<HrPersonasResponse>('/service/search/hr/v2/personas', query);
     return extractRecords(data);
+  }
+
+  async searchFullText(params: {
+    keywords?: string;
+    fullName?: string;
+    place?: string;
+    yearFrom?: number;
+    yearTo?: number;
+    imageGroupNumber?: string;
+    collectionId?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<FullTextSearchResults> {
+    const query: Record<string, string | number> = {
+      count: params.limit ?? 5,
+      offset: params.offset ?? 0,
+      'm.defaultFacets': 'on',
+      'm.queryRequireDefault': 'on',
+    };
+
+    if (params.keywords) query['q.text'] = params.keywords;
+    if (params.fullName) query['q.fullName'] = params.fullName;
+    if (params.place) query['q.anyPlace'] = params.place;
+    if (params.yearFrom !== undefined) query['q.anyDate.from'] = params.yearFrom;
+    if (params.yearTo !== undefined) query['q.anyDate.to'] = params.yearTo;
+    if (params.imageGroupNumber) query['q.groupName'] = params.imageGroupNumber;
+    if (params.collectionId) query['f.collectionId'] = params.collectionId;
+
+    const data = await this.request<FullTextSearchResponse>('/service/search/fulltext/search', query);
+    return {
+      total: data.results ?? 0,
+      offset: data.index ?? params.offset ?? 0,
+      nextUrl: data.links?.next?.href || '',
+      entries: (data.entries || []).map((entry) => ({
+        id: entry.id || 'Unknown',
+        title: entry.content?.title || entry.collectionTitle || 'Untitled document',
+        collectionId: entry.collectionId || '',
+        collectionTitle: entry.collectionTitle || '',
+        recordDate: entry.content?.recordDate || 'Unknown',
+        recordType: entry.content?.recordType || 'Unknown',
+        recordPlace: entry.content?.recordPlace || 'Unknown',
+        transcript: entry.content?.textDocument || '',
+        highlights: (entry.content?.highlightTexts || []).filter(Boolean),
+        entities: (entry.content?.entities || [])
+          .filter((entity): entity is { type: string; value: string } => Boolean(entity.type && entity.value))
+          .map((entity) => ({ type: entity.type, value: entity.value })),
+        sourceUrl: entry.sourceUrl || (entry.id ? `https://www.familysearch.org/ark:/61903/${entry.id}` : ''),
+      })),
+    };
   }
 }
 
