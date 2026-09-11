@@ -23,8 +23,9 @@ export const defaultConfig: FamilySearchConfig = {
 
 export function ensureConfigDir(): void {
   if (!fs.existsSync(configDir)) {
-    fs.mkdirSync(configDir, { recursive: true });
+    fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
   }
+  fs.chmodSync(configDir, 0o700);
 }
 
 export function loadConfig(): FamilySearchConfig {
@@ -44,5 +45,6 @@ export function loadConfig(): FamilySearchConfig {
 
 export function saveConfig(config: FamilySearchConfig): void {
   ensureConfigDir();
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), { mode: 0o600 });
+  fs.chmodSync(configPath, 0o600);
 }

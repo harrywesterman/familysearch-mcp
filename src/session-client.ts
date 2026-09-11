@@ -202,6 +202,7 @@ export class FamilySearchSessionClient {
   private minIntervalMs: number;
   private maxRetries: number;
   private lastRequestAt = 0;
+  private throttleQueue: Promise<void> = Promise.resolve();
 
   constructor(options: SessionClientOptions) {
     this.cookies = options.cookies || buildCookieHeader(options.sessionId, options.fsAnid);
@@ -222,11 +223,22 @@ export class FamilySearchSessionClient {
   }
 
   private async throttle(): Promise<void> {
-    const wait = this.minIntervalMs - (Date.now() - this.lastRequestAt);
-    if (wait > 0) {
-      await sleep(wait);
+    const previous = this.throttleQueue;
+    let release!: () => void;
+    this.throttleQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await previous;
+    try {
+      const wait = this.minIntervalMs - (Date.now() - this.lastRequestAt);
+      if (wait > 0) {
+        await sleep(wait);
+      }
+      this.lastRequestAt = Date.now();
+    } finally {
+      release();
     }
-    this.lastRequestAt = Date.now();
   }
 
   private backoffMs(attempt: number): number {
@@ -276,10 +288,16 @@ export class FamilySearchSessionClient {
       try {
         data = text ? JSON.parse(text) : {};
       } catch {
-        throw new FamilySearchSessionError(
+        const parseError = new FamilySearchSessionError(
           `Invalid JSON response (${response.status}) from ${path}: ${text.slice(0, 200)}`,
           response.status,
         );
+        if (isRetryableStatus(response.status) && attempt < this.maxRetries) {
+          lastError = parseError;
+          await sleep(this.backoffMs(attempt));
+          continue;
+        }
+        throw parseError;
       }
 
       // FamilySearch-specific errors are handled before the generic !response.ok

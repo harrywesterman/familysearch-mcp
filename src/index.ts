@@ -112,6 +112,8 @@ server.tool(
     } catch (error) {
       config.cookies = '';
       config.sessionId = '';
+      config.fsAnid = '';
+      sessionClient.setSession('', '', '');
       persistConfig();
       return {
         content: [{ type: 'text', text: `Session validation failed: ${formatError(error)}` }],
