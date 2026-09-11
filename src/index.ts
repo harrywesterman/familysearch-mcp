@@ -14,6 +14,7 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const loginScriptPath = join(__dirname, '..', 'scripts', 'browser-login.mjs');
+const downloadDocumentScriptPath = join(__dirname, '..', 'scripts', 'download-document.mjs');
 
 let config: FamilySearchConfig = loadConfig();
 const sessionClient = new FamilySearchSessionClient({
@@ -80,6 +81,43 @@ function applySessionCookies(cookies: string, sessionId?: string, fsAnid?: strin
   config.sessionId = sessionId?.trim() || extractCookieValue(config.cookies, 'fssessionid');
   config.fsAnid = fsAnid?.trim() || extractCookieValue(config.cookies, 'fs_anid');
   sessionClient.setSession(config.sessionId, config.fsAnid, config.cookies);
+}
+
+interface DocumentDownloadResult {
+  imageId: string;
+  format: string;
+  outputPath: string;
+  bytes: number;
+  viewerUrl: string;
+  highResolution: boolean;
+}
+
+async function downloadDocument(options: Record<string, unknown>): Promise<DocumentDownloadResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [downloadDocumentScriptPath, JSON.stringify(options)], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || `Document download exited with code ${code}`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout) as DocumentDownloadResult);
+      } catch {
+        reject(new Error(`Document download returned invalid output: ${stdout.slice(0, 200)}`));
+      }
+    });
+  });
 }
 
 server.tool(
@@ -472,6 +510,40 @@ server.tool(
       };
     } catch (error) {
       return { content: [{ type: 'text', text: `Error searching full-text records: ${formatError(error)}` }] };
+    }
+  },
+);
+
+server.tool(
+  'download-document',
+  'Download a FamilySearch record image as original high-resolution JPG or as a PDF through the official viewer',
+  {
+    imageId: z.string().describe('FamilySearch image ID (for example 3:1:3QHK-93G5-35Q3) or its ARK URL'),
+    format: z.enum(['jpg', 'pdf-highlights', 'pdf-no-highlights']).optional().describe('jpg is the original high-resolution scan (default)'),
+    outputDirectory: z.string().optional().describe('Destination directory (default: ~/Downloads/familysearch-mcp)'),
+    fileName: z.string().optional().describe('Optional file name; unsafe path characters are removed and existing files are never overwritten'),
+  },
+  async (params) => {
+    if (!isAuthenticated()) {
+      return { content: [{ type: 'text', text: authRequiredText() }] };
+    }
+    try {
+      const result = await downloadDocument(params);
+      return {
+        content: [{
+          type: 'text',
+          text: [
+            'FamilySearch document downloaded.',
+            `Image ID: ${result.imageId}`,
+            `Format: ${result.format}${result.highResolution ? ' (original high resolution)' : ''}`,
+            `Size: ${result.bytes} bytes`,
+            `Saved to: ${result.outputPath}`,
+            `Viewer: ${result.viewerUrl}`,
+          ].join('\n'),
+        }],
+      };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error downloading document: ${formatError(error)}` }] };
     }
   },
 );
