@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { chromium } from 'playwright';
-import { existsSync, mkdirSync, readFileSync, statSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { homedir, platform } from 'os';
 import { basename, extname, join, resolve } from 'path';
 
@@ -31,6 +31,16 @@ function parseImageId(value) {
   const match = String(value || '').match(/3:1:[A-Z0-9-]+/i);
   if (!match) throw new Error('Expected a FamilySearch image ID such as 3:1:3QHK-93G5-35Q3 or an ARK URL containing one.');
   return match[0];
+}
+
+function parseImageLocator(options) {
+  if (options.imageId || options.arkUrl) return parseImageId(options.imageId || options.arkUrl);
+  const digits = String(options.dgs || '').replace(/\D/g, '');
+  const imageNumber = Number(options.imageNumber);
+  if (!digits || digits.length > 9 || !Number.isInteger(imageNumber) || imageNumber < 1) {
+    throw new Error('Provide imageId, or provide both dgs and a positive imageNumber.');
+  }
+  return `dgs:${digits.padStart(9, '0')}_${String(imageNumber).padStart(5, '0')}`;
 }
 
 function loadCookies() {
@@ -74,9 +84,12 @@ function availablePath(directory, fileName) {
 
 async function main() {
   const options = JSON.parse(process.argv[2] || '{}');
-  const imageId = parseImageId(options.imageId || options.arkUrl);
+  const imageId = parseImageLocator(options);
   const format = FORMAT_OPTIONS[options.format || 'jpg'];
   if (!format) throw new Error(`Unsupported format: ${options.format}`);
+  if (imageId.startsWith('dgs:') && (options.format || 'jpg') !== 'jpg') {
+    throw new Error('DGS + imageNumber downloads support JPG only; use a 3:1 ARK image ID for PDF downloads.');
+  }
 
   const executablePath = findBrowserExecutable();
   if (!executablePath) throw new Error('No supported Brave, Chromium, or Chrome browser found.');
@@ -97,6 +110,27 @@ async function main() {
     await context.addCookies(loadCookies());
     const page = await context.newPage();
     const viewerUrl = `https://www.familysearch.org/ark:/61903/${imageId}?view=fullText&lang=en`;
+
+    // DGS locators do not always redirect to the modern viewer, but DAS can
+    // serve their original distribution image directly to the same session.
+    if (imageId.startsWith('dgs:') && (options.format || 'jpg') === 'jpg') {
+      const response = await context.request.get(`https://www.familysearch.org/das/v2/${imageId}/$dist`, {
+        timeout: 120_000,
+      });
+      if (!response.ok()) throw new Error(`FamilySearch DGS download failed with status ${response.status()}`);
+      writeFileSync(outputPath, await response.body(), { mode: 0o600 });
+      const stats = statSync(outputPath);
+      process.stdout.write(JSON.stringify({
+        imageId,
+        format: 'jpg',
+        outputPath,
+        bytes: stats.size,
+        viewerUrl,
+        highResolution: true,
+      }));
+      return;
+    }
+
     await page.goto(viewerUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
 
     const downloadButton = page.getByRole('button', { name: /^download$/i }).first();

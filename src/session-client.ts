@@ -156,6 +156,61 @@ export interface FullTextSearchResults {
   entries: FullTextSearchResult[];
 }
 
+export type FullTextMatchMode = 'any' | 'all' | 'exact';
+
+export function applyFullTextMatchMode(value: string, mode: FullTextMatchMode = 'any'): string {
+  const trimmed = value.trim();
+  if (!trimmed || mode === 'any') return trimmed;
+  if (mode === 'exact') {
+    return `"${trimmed.replace(/^"|"$/g, '').replace(/"/g, '\\"')}"`;
+  }
+  return trimmed
+    .match(/"[^"]+"|\S+/g)
+    ?.map((term) => (term.startsWith('+') || term.startsWith('-') ? term : `+${term}`))
+    .join(' ') || '';
+}
+
+interface CatalogMetadata {
+  identifier?: { value?: string };
+  title?: Array<{ value?: string }>;
+  creator?: Array<{ value?: string }>;
+  contributor?: Array<{ value?: string }>;
+  subject?: Array<{ value?: string }>;
+  coverage?: Array<{ place?: string; datesOrig?: string }>;
+  repositoryCalls?: Array<{ title?: string }>;
+}
+
+interface CatalogSearchResponse {
+  totalHits?: number;
+  offset?: number;
+  searchHits?: Array<{ metadataHit?: { metadata?: CatalogMetadata; score?: number } }>;
+}
+
+export interface CatalogSearchResult {
+  title: string;
+  identifier: string;
+  url: string;
+  creators: string[];
+  subjects: string[];
+  coverage: string[];
+  holdings: string[];
+  score: number;
+}
+
+export interface CatalogSearchResults {
+  total: number;
+  offset: number;
+  entries: CatalogSearchResult[];
+}
+
+export interface FilmImageResult {
+  imageNumber: number;
+  locator: string;
+  apid: string;
+  arkUrl: string;
+  thumbnailUrl: string;
+}
+
 function extractRecords(data: HrPersonasResponse): HistoricalRecordResult[] {
   const globalSources = data.gedcomx?.sourceDescriptions || [];
 
@@ -334,19 +389,26 @@ export class FamilySearchSessionClient {
 
       const text = await response.text();
       let data: unknown;
+      const contentType = response.headers.get('content-type') || '';
       try {
-        data = text ? JSON.parse(text) : {};
+        data = text && (contentType.includes('json') || /^[\[{]/.test(text.trim())) ? JSON.parse(text) : text;
       } catch {
-        const parseError = new FamilySearchSessionError(
-          `Invalid JSON response (${response.status}) from ${path}: ${text.slice(0, 200)}`,
-          response.status,
-        );
-        if (isRetryableStatus(response.status) && attempt < this.maxRetries) {
-          lastError = parseError;
-          await sleep(this.backoffMs(attempt));
-          continue;
+        // A few legacy DAS endpoints advertise application/json but return a
+        // bare identifier such as TH-123 instead of a JSON string.
+        if (response.ok && !/^[\[{]/.test(text.trim())) {
+          data = text;
+        } else {
+          const parseError = new FamilySearchSessionError(
+            `Invalid JSON response (${response.status}) from ${path}: ${text.slice(0, 200)}`,
+            response.status,
+          );
+          if (isRetryableStatus(response.status) && attempt < this.maxRetries) {
+            lastError = parseError;
+            await sleep(this.backoffMs(attempt));
+            continue;
+          }
+          throw parseError;
         }
-        throw parseError;
       }
 
       // FamilySearch-specific errors are handled before the generic !response.ok
@@ -675,6 +737,7 @@ export class FamilySearchSessionClient {
     collectionId?: string;
     limit?: number;
     offset?: number;
+    matchMode?: FullTextMatchMode;
   }): Promise<FullTextSearchResults> {
     const query: Record<string, string | number> = {
       count: params.limit ?? 5,
@@ -683,8 +746,8 @@ export class FamilySearchSessionClient {
       'm.queryRequireDefault': 'on',
     };
 
-    if (params.keywords) query['q.text'] = params.keywords;
-    if (params.fullName) query['q.fullName'] = params.fullName;
+    if (params.keywords) query['q.text'] = applyFullTextMatchMode(params.keywords, params.matchMode);
+    if (params.fullName) query['q.fullName'] = applyFullTextMatchMode(params.fullName, params.matchMode);
     if (params.place) query['q.anyPlace'] = params.place;
     if (params.yearFrom !== undefined) query['q.anyDate.from'] = params.yearFrom;
     if (params.yearTo !== undefined) query['q.anyDate.to'] = params.yearTo;
@@ -712,6 +775,91 @@ export class FamilySearchSessionClient {
         sourceUrl: entry.sourceUrl || (entry.id ? `https://www.familysearch.org/ark:/61903/${entry.id}` : ''),
       })),
     };
+  }
+
+  async searchCatalog(params: {
+    place?: string;
+    keywords?: string;
+    title?: string;
+    author?: string;
+    subject?: string;
+    surname?: string;
+    callNumber?: string;
+    filmNumber?: string;
+    onlineOnly?: boolean;
+    limit?: number;
+    offset?: number;
+  }): Promise<CatalogSearchResults> {
+    const query: Record<string, string | number | boolean> = {
+      count: params.limit ?? 10,
+      offset: params.offset ?? 0,
+    };
+    if (params.place) query['q.place'] = params.place;
+    if (params.keywords) query['q.keyword'] = params.keywords;
+    if (params.title) query['q.title'] = params.title;
+    if (params.author) query['q.author'] = params.author;
+    if (params.subject) query['q.subject'] = params.subject;
+    if (params.surname) query['q.surname'] = params.surname;
+    if (params.callNumber) query['q.callNumber'] = params.callNumber;
+    if (params.filmNumber) query['q.filmNumber'] = params.filmNumber.replace(/^0+/, '') || '0';
+    if (params.onlineOnly) query['f.availability'] = 'online';
+
+    const data = await this.request<CatalogSearchResponse>('/service/search/catalog/v3/search', query);
+    return {
+      total: data.totalHits ?? 0,
+      offset: data.offset ?? params.offset ?? 0,
+      entries: (data.searchHits || []).map((hit) => {
+        const metadata = hit.metadataHit?.metadata || {};
+        const identifier = metadata.identifier?.value || '';
+        const catalogKey = identifier.match(/\/item\/(koha:[^/?#]+)/)?.[1];
+        return {
+          title: metadata.title?.map((entry) => entry.value).find(Boolean) || 'Untitled catalog item',
+          identifier,
+          url: catalogKey ? `https://www.familysearch.org/en/search/catalog/${catalogKey}` : identifier,
+          creators: [...(metadata.creator || []), ...(metadata.contributor || [])]
+            .map((entry) => entry.value || '')
+            .filter(Boolean),
+          subjects: (metadata.subject || []).map((entry) => entry.value || '').filter(Boolean),
+          coverage: (metadata.coverage || [])
+            .map((entry) => [entry.place, entry.datesOrig].filter(Boolean).join('; '))
+            .filter(Boolean),
+          holdings: (metadata.repositoryCalls || []).map((entry) => entry.title || '').filter(Boolean),
+          score: hit.metadataHit?.score ?? 0,
+        };
+      }),
+    };
+  }
+
+  async listFilmImages(params: {
+    dgs: string;
+    startImage?: number;
+    limit?: number;
+  }): Promise<FilmImageResult[]> {
+    const dgs = params.dgs.replace(/\D/g, '').padStart(9, '0');
+    if (!/^[0-9]{9}$/.test(dgs)) throw new FamilySearchSessionError('DGS must contain at most 9 digits.');
+    const startImage = Math.max(1, Math.trunc(params.startImage ?? 1));
+    const limit = Math.min(100, Math.max(1, Math.trunc(params.limit ?? 20)));
+    const results: FilmImageResult[] = [];
+
+    for (let imageNumber = startImage; imageNumber < startImage + limit; imageNumber++) {
+      const locator = `dgs:${dgs}_${String(imageNumber).padStart(5, '0')}`;
+      try {
+        const apid = await this.request<string>(`/das/v2/${locator}/name`, { namespace: 'apid' });
+        const normalizedApid = String(apid).replace(/^"|"$/g, '').trim();
+        if (!normalizedApid) break;
+        results.push({
+          imageNumber,
+          locator,
+          apid: normalizedApid,
+          arkUrl: `https://www.familysearch.org/ark:/61903/${locator}`,
+          thumbnailUrl: `https://www.familysearch.org/service/records/storage/deepzoomcloud/dz/v1/apid:${normalizedApid}/thumb_p200.jpg`,
+        });
+      } catch (error) {
+        if (error instanceof FamilySearchSessionError && (error.statusCode === 400 || error.statusCode === 404)) break;
+        throw error;
+      }
+    }
+    return results;
   }
 }
 

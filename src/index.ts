@@ -468,6 +468,7 @@ server.tool(
     limit: z.number().int().min(1).max(20).optional().describe('Maximum results (default: 5, max: 20)'),
     offset: z.number().int().min(0).optional().describe('Result offset for pagination (default: 0)'),
     includeFullTranscript: z.boolean().optional().describe('Return complete OCR text instead of an excerpt; use with a low limit'),
+    matchMode: z.enum(['any', 'all', 'exact']).optional().describe('How multi-word keywords and names are matched: any (OR, default), all (AND), or exact phrase'),
   },
   async (params) => {
     if (!isAuthenticated()) {
@@ -515,10 +516,77 @@ server.tool(
 );
 
 server.tool(
+  'search-catalog',
+  'Search the FamilySearch catalog for collections, films, image groups, books, and other holdings',
+  {
+    place: z.string().optional().describe('Place name'),
+    keywords: z.string().optional().describe('Keywords across catalog metadata'),
+    title: z.string().optional().describe('Words from the title'),
+    author: z.string().optional().describe('Author or organization'),
+    subject: z.string().optional().describe('Subject'),
+    surname: z.string().optional().describe('Surname'),
+    callNumber: z.string().optional().describe('Library call number'),
+    filmNumber: z.string().optional().describe('Film, fiche, or DGS number; leading zeroes are accepted'),
+    onlineOnly: z.boolean().optional().describe('Only return online material'),
+    limit: z.number().int().min(1).max(50).optional().describe('Maximum results (default: 10)'),
+    offset: z.number().int().min(0).optional().describe('Result offset (default: 0)'),
+  },
+  async (params) => {
+    if (!isAuthenticated()) return { content: [{ type: 'text', text: authRequiredText() }] };
+    if (!Object.entries(params).some(([key, value]) => !['limit', 'offset', 'onlineOnly'].includes(key) && value)) {
+      return { content: [{ type: 'text', text: 'Provide at least one catalog search field.' }] };
+    }
+    try {
+      const results = await sessionClient.searchCatalog(params);
+      if (!results.entries.length) return { content: [{ type: 'text', text: 'No matching catalog items found.' }] };
+      const text = results.entries.map((entry, index) => [
+        `${results.offset + index + 1}. ${entry.title}`,
+        `   Catalog: ${entry.url || entry.identifier || 'Unknown'}`,
+        entry.creators.length ? `   Author: ${entry.creators.join('; ')}` : '',
+        entry.coverage.length ? `   Coverage: ${entry.coverage.join('; ')}` : '',
+        entry.subjects.length ? `   Subjects: ${entry.subjects.join('; ')}` : '',
+        entry.holdings.length ? `   Holdings: ${entry.holdings.join('; ')}` : '',
+      ].filter(Boolean).join('\n')).join('\n\n');
+      return { content: [{ type: 'text', text: `Found ${results.total} catalog items; showing ${results.entries.length}:\n\n${text}` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error searching the catalog: ${formatError(error)}` }] };
+    }
+  },
+);
+
+server.tool(
+  'list-film-images',
+  'List addressable images in a FamilySearch film/image group (DGS), starting at a chosen image number',
+  {
+    dgs: z.string().regex(/^\d{1,9}$/).describe('FamilySearch DGS/image group number; leading zeroes are optional'),
+    startImage: z.number().int().min(1).optional().describe('First image number (default: 1)'),
+    limit: z.number().int().min(1).max(100).optional().describe('Number of images to list (default: 20, max: 100)'),
+  },
+  async (params: { dgs: string; startImage?: number; limit?: number }) => {
+    if (!isAuthenticated()) return { content: [{ type: 'text', text: authRequiredText() }] };
+    try {
+      const images = await sessionClient.listFilmImages(params);
+      if (!images.length) return { content: [{ type: 'text', text: 'No accessible images found at that DGS/image position.' }] };
+      const text = images.map((entry) => [
+        `${entry.imageNumber}. ${entry.locator}`,
+        `   APID: ${entry.apid}`,
+        `   Viewer: ${entry.arkUrl}`,
+        `   Thumbnail: ${entry.thumbnailUrl}`,
+      ].join('\n')).join('\n\n');
+      return { content: [{ type: 'text', text: `Found ${images.length} accessible film images:\n\n${text}` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error listing film images: ${formatError(error)}` }] };
+    }
+  },
+);
+
+server.tool(
   'download-document',
   'Download a FamilySearch record image as original high-resolution JPG or as a PDF through the official viewer',
   {
-    imageId: z.string().describe('FamilySearch image ID (for example 3:1:3QHK-93G5-35Q3) or its ARK URL'),
+    imageId: z.string().optional().describe('FamilySearch 3:1 image ID or its ARK URL; alternatively use dgs plus imageNumber'),
+    dgs: z.string().regex(/^\d{1,9}$/).optional().describe('DGS/image group number (use together with imageNumber)'),
+    imageNumber: z.number().int().min(1).optional().describe('One-based image number within the DGS'),
     format: z.enum(['jpg', 'pdf-highlights', 'pdf-no-highlights']).optional().describe('jpg is the original high-resolution scan (default)'),
     outputDirectory: z.string().optional().describe('Destination directory (default: ~/Downloads/familysearch-mcp)'),
     fileName: z.string().optional().describe('Optional file name; unsafe path characters are removed and existing files are never overwritten'),
@@ -526,6 +594,15 @@ server.tool(
   async (params) => {
     if (!isAuthenticated()) {
       return { content: [{ type: 'text', text: authRequiredText() }] };
+    }
+    if (!params.imageId && !(params.dgs && params.imageNumber)) {
+      return { content: [{ type: 'text', text: 'Provide imageId, or both dgs and imageNumber.' }] };
+    }
+    if (params.imageId && (params.dgs || params.imageNumber)) {
+      return { content: [{ type: 'text', text: 'Use either imageId or dgs + imageNumber, not both.' }] };
+    }
+    if (params.dgs && params.format && params.format !== 'jpg') {
+      return { content: [{ type: 'text', text: 'DGS + imageNumber downloads support JPG only; use a 3:1 ARK image ID for PDF.' }] };
     }
     try {
       const result = await downloadDocument(params);

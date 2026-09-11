@@ -8,6 +8,9 @@ A local [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server 
 - **Person details** — view a person card by ID
 - **Pedigree exploration** — ancestors (up to 8 generations) and descendants (up to 3)
 - **Historical records** — search record collections
+- **AI full-text search** — search OCR transcripts with OR, AND, or exact-phrase matching
+- **Catalog and film browsing** — find catalog items and resolve pages in a DGS image group
+- **High-resolution downloads** — download by ARK image ID or by DGS + image number
 - **Browser session auth** — log in once with Brave; no FamilySearch API key required
 
 ## How it works
@@ -210,7 +213,9 @@ The full cookie string is required — bot protection cookies like `reese84` and
 | `get-descendants` | View descendants (default 2 generations, max 3) |
 | `search-records` | Search historical record collections (date ranges, gender, limit/offset; returns the record `ark` link) |
 | `search-full-text` | Search FamilySearch AI-OCR transcripts of unindexed scans by keywords, name, place, years, DGS or collection |
-| `download-document` | Download a scan as original high-resolution JPG or as PDF, without overwriting existing files |
+| `search-catalog` | Search the catalog by place, keywords, title, author, subject, surname, call number, film number, or DGS |
+| `list-film-images` | Resolve a range of one-based image numbers in a DGS to stable DGS locators and APIDs |
+| `download-document` | Download a scan by ARK image ID or DGS + image number, without overwriting existing files |
 
 ### Example prompts
 
@@ -234,6 +239,10 @@ Search historical records for surname "Reiss" in "Pennsylvania"
 Search the full text for "voogd" and "Leeuwarden" between 1700 and 1800
 ```
 
+Set `matchMode` to `all` to require every word (`+word`) or to `exact` to
+search for an exact quoted phrase. The default, `any`, retains FamilySearch's
+OR behavior.
+
 Full-text results include an OCR excerpt and a direct FamilySearch ARK link to the
 scan. Set `includeFullTranscript` to `true` to return the complete AI transcript;
 use a low result limit because transcripts can be large.
@@ -242,9 +251,22 @@ use a low result limit because transcripts can be large.
 Download image 3:1:3QHK-93G5-35Q3 as a high-resolution JPG
 ```
 
+```
+Find catalog material for Leeuwarden with "trouwregister" in the title
+```
+
+```
+List 20 images from DGS 008903222, starting at image 500
+```
+
+```
+Download image 517 from DGS 008903222 as a high-resolution JPG
+```
+
 Downloads are saved to `~/Downloads/familysearch-mcp` by default. The official
 FamilySearch viewer opens briefly while preparing the file. JPG downloads use the
-original scan resolution; PDF downloads are available with or without highlights.
+original scan resolution. Downloads addressed by DGS currently support original
+JPG; PDF downloads with or without highlights require a `3:1` ARK image ID.
 
 ---
 
