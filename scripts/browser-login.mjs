@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Opens Brave for FamilySearch login and saves the session cookie locally.
- * Uses the installed Brave browser instead of Playwright Chromium to avoid bot detection.
+ * Opens an installed browser for FamilySearch login and saves the session cookie locally.
+ * Prefers Brave, then falls back to Chrome or Chromium.
  *
  * Usage: npm run login
  */
@@ -12,23 +12,36 @@ import { join } from 'path';
 
 const configDir = join(homedir(), '.familysearch-mcp');
 const configPath = join(configDir, 'config.json');
-const braveProfileDir = join(configDir, 'brave-profile');
+const browserProfileDir = join(configDir, 'browser-profile');
 
-const BRAVE_PATHS = {
-  darwin: ['/Applications/Brave Browser.app/Contents/MacOS/Brave Browser'],
-  linux: ['/usr/bin/brave-browser', '/usr/bin/brave', '/snap/bin/brave'],
+const BROWSER_PATHS = {
+  darwin: [
+    '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+  ],
+  linux: [
+    '/usr/bin/brave-browser',
+    '/usr/bin/brave',
+    '/snap/bin/brave',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+  ],
   win32: [
     join(process.env.PROGRAMFILES || 'C:\\Program Files', 'BraveSoftware/Brave-Browser/Application/brave.exe'),
     join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'BraveSoftware/Brave-Browser/Application/brave.exe'),
+    join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Google/Chrome/Application/chrome.exe'),
   ],
 };
 
-function findBraveExecutable() {
-  if (process.env.BRAVE_PATH && existsSync(process.env.BRAVE_PATH)) {
-    return process.env.BRAVE_PATH;
+function findBrowserExecutable() {
+  const configuredPath = process.env.FAMILYSEARCH_BROWSER_PATH || process.env.BRAVE_PATH;
+  if (configuredPath && existsSync(configuredPath)) {
+    return configuredPath;
   }
 
-  const candidates = BRAVE_PATHS[platform()] || [];
+  const candidates = BROWSER_PATHS[platform()] || [];
   return candidates.find((path) => existsSync(path)) || null;
 }
 
@@ -77,22 +90,22 @@ function readLoggedInUser(page) {
 }
 
 async function main() {
-  const bravePath = findBraveExecutable();
-  if (!bravePath) {
-    console.error('Brave browser not found.');
-    console.error('Install Brave from https://brave.com/download/ or set BRAVE_PATH to your Brave executable.');
+  const browserPath = findBrowserExecutable();
+  if (!browserPath) {
+    console.error('No supported Brave, Chrome, or Chromium browser found.');
+    console.error('Set FAMILYSEARCH_BROWSER_PATH to your browser executable.');
     process.exit(1);
   }
 
-  if (!existsSync(braveProfileDir)) {
-    mkdirSync(braveProfileDir, { recursive: true });
+  if (!existsSync(browserProfileDir)) {
+    mkdirSync(browserProfileDir, { recursive: true });
   }
 
-  console.error(`Opening Brave for FamilySearch login (${bravePath})...`);
+  console.error(`Opening browser for FamilySearch login (${browserPath})...`);
   console.error('Sign in at familysearch.org. This window waits until you are fully logged in (up to 15 minutes).');
 
-  const context = await chromium.launchPersistentContext(braveProfileDir, {
-    executablePath: bravePath,
+  const context = await chromium.launchPersistentContext(browserProfileDir, {
+    executablePath: browserPath,
     headless: false,
     viewport: null,
     ignoreDefaultArgs: ['--enable-automation'],
@@ -117,6 +130,7 @@ async function main() {
           return false;
         }
       },
+      undefined,
       { timeout: 15 * 60 * 1000 },
     );
   } catch {

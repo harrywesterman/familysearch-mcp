@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { chromium } from 'playwright';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'fs';
 import { homedir, platform } from 'os';
 import { basename, extname, join, resolve } from 'path';
 
@@ -84,12 +84,9 @@ function availablePath(directory, fileName) {
 
 async function main() {
   const options = JSON.parse(process.argv[2] || '{}');
-  const imageId = parseImageLocator(options);
+  let imageId = parseImageLocator(options);
   const format = FORMAT_OPTIONS[options.format || 'jpg'];
   if (!format) throw new Error(`Unsupported format: ${options.format}`);
-  if (imageId.startsWith('dgs:') && (options.format || 'jpg') !== 'jpg') {
-    throw new Error('DGS + imageNumber downloads support JPG only; use a 3:1 ARK image ID for PDF downloads.');
-  }
 
   const executablePath = findBrowserExecutable();
   if (!executablePath) throw new Error('No supported Brave, Chromium, or Chrome browser found.');
@@ -109,28 +106,29 @@ async function main() {
     const context = await browser.newContext({ viewport: null, acceptDownloads: true });
     await context.addCookies(loadCookies());
     const page = await context.newPage();
-    const viewerUrl = `https://www.familysearch.org/ark:/61903/${imageId}?view=fullText&lang=en`;
-
-    // DGS locators do not always redirect to the modern viewer, but DAS can
-    // serve their original distribution image directly to the same session.
-    if (imageId.startsWith('dgs:') && (options.format || 'jpg') === 'jpg') {
-      const response = await context.request.get(`https://www.familysearch.org/das/v2/${imageId}/$dist`, {
-        timeout: 120_000,
+    if (imageId.startsWith('dgs:')) {
+      const match = imageId.match(/^dgs:(\d{9})_(\d{5})$/);
+      if (!match) throw new Error(`Invalid DGS image locator: ${imageId}`);
+      const [, dgs, paddedImageNumber] = match;
+      const imageNumber = Number(paddedImageNumber);
+      const filmDataPromise = page.waitForResponse(
+        (response) => response.url().endsWith('/search/filmdatainfo/film-data') && response.status() === 200,
+        { timeout: 90_000 },
+      );
+      await page.goto(`https://www.familysearch.org/en/search/film/${dgs}?lang=en&i=0`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 90_000,
       });
-      if (!response.ok()) throw new Error(`FamilySearch DGS download failed with status ${response.status()}`);
-      writeFileSync(outputPath, await response.body(), { mode: 0o600 });
-      const stats = statSync(outputPath);
-      process.stdout.write(JSON.stringify({
-        imageId,
-        format: 'jpg',
-        outputPath,
-        bytes: stats.size,
-        viewerUrl,
-        highResolution: true,
-      }));
-      return;
+      if (page.url().includes('/auth/familysearch/login')) {
+        throw new Error('FamilySearch session expired. Run login-with-browser again.');
+      }
+      const filmData = await (await filmDataPromise).json();
+      const imageUrl = Array.isArray(filmData.images) ? filmData.images[imageNumber - 1] : undefined;
+      if (!imageUrl) throw new Error(`DGS ${dgs} has no image ${imageNumber}.`);
+      imageId = parseImageId(imageUrl);
     }
 
+    const viewerUrl = `https://www.familysearch.org/ark:/61903/${imageId}?view=fullText&lang=en`;
     await page.goto(viewerUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
 
     const downloadButton = page.getByRole('button', { name: /^download$/i }).first();

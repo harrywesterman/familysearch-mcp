@@ -15,6 +15,7 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const loginScriptPath = join(__dirname, '..', 'scripts', 'browser-login.mjs');
 const downloadDocumentScriptPath = join(__dirname, '..', 'scripts', 'download-document.mjs');
+const listFilmImagesScriptPath = join(__dirname, '..', 'scripts', 'list-film-images.mjs');
 
 let config: FamilySearchConfig = loadConfig();
 const sessionClient = new FamilySearchSessionClient({
@@ -92,32 +93,32 @@ interface DocumentDownloadResult {
   highResolution: boolean;
 }
 
-async function downloadDocument(options: Record<string, unknown>): Promise<DocumentDownloadResult> {
+interface FilmImagesResult {
+  dgs: string;
+  total: number;
+  startImage: number;
+  filmUrl: string;
+  entries: Array<{ imageNumber: number; imageId: string; arkUrl: string; thumbnailUrl: string }>;
+}
+
+function runJsonHelper<T>(scriptPath: string, options: Record<string, unknown>, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [downloadDocumentScriptPath, JSON.stringify(options)], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const child = spawn(process.execPath, [scriptPath, JSON.stringify(options)], { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
     child.on('error', reject);
     child.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(stderr.trim() || `Document download exited with code ${code}`));
-        return;
-      }
-      try {
-        resolve(JSON.parse(stdout) as DocumentDownloadResult);
-      } catch {
-        reject(new Error(`Document download returned invalid output: ${stdout.slice(0, 200)}`));
-      }
+      if (code !== 0) return reject(new Error(stderr.trim() || `${label} exited with code ${code}`));
+      try { resolve(JSON.parse(stdout) as T); }
+      catch { reject(new Error(`${label} returned invalid output: ${stdout.slice(0, 200)}`)); }
     });
   });
+}
+
+async function downloadDocument(options: Record<string, unknown>): Promise<DocumentDownloadResult> {
+  return runJsonHelper<DocumentDownloadResult>(downloadDocumentScriptPath, options, 'Document download');
 }
 
 server.tool(
@@ -565,15 +566,14 @@ server.tool(
   async (params: { dgs: string; startImage?: number; limit?: number }) => {
     if (!isAuthenticated()) return { content: [{ type: 'text', text: authRequiredText() }] };
     try {
-      const images = await sessionClient.listFilmImages(params);
-      if (!images.length) return { content: [{ type: 'text', text: 'No accessible images found at that DGS/image position.' }] };
-      const text = images.map((entry) => [
-        `${entry.imageNumber}. ${entry.locator}`,
-        `   APID: ${entry.apid}`,
+      const result = await runJsonHelper<FilmImagesResult>(listFilmImagesScriptPath, params, 'Film image listing');
+      if (!result.entries.length) return { content: [{ type: 'text', text: `DGS ${result.dgs} has ${result.total} images, but none fall in the requested range.` }] };
+      const text = result.entries.map((entry) => [
+        `${entry.imageNumber}. ${entry.imageId}`,
         `   Viewer: ${entry.arkUrl}`,
         `   Thumbnail: ${entry.thumbnailUrl}`,
       ].join('\n')).join('\n\n');
-      return { content: [{ type: 'text', text: `Found ${images.length} accessible film images:\n\n${text}` }] };
+      return { content: [{ type: 'text', text: `DGS ${result.dgs} contains ${result.total} images; showing ${result.entries.length} from image ${result.startImage}:\nFilm: ${result.filmUrl}\n\n${text}` }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Error listing film images: ${formatError(error)}` }] };
     }
@@ -600,9 +600,6 @@ server.tool(
     }
     if (params.imageId && (params.dgs || params.imageNumber)) {
       return { content: [{ type: 'text', text: 'Use either imageId or dgs + imageNumber, not both.' }] };
-    }
-    if (params.dgs && params.format && params.format !== 'jpg') {
-      return { content: [{ type: 'text', text: 'DGS + imageNumber downloads support JPG only; use a 3:1 ARK image ID for PDF.' }] };
     }
     try {
       const result = await downloadDocument(params);

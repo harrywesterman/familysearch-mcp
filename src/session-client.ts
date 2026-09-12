@@ -203,14 +203,6 @@ export interface CatalogSearchResults {
   entries: CatalogSearchResult[];
 }
 
-export interface FilmImageResult {
-  imageNumber: number;
-  locator: string;
-  apid: string;
-  arkUrl: string;
-  thumbnailUrl: string;
-}
-
 function extractRecords(data: HrPersonasResponse): HistoricalRecordResult[] {
   const globalSources = data.gedcomx?.sourceDescriptions || [];
 
@@ -793,9 +785,11 @@ export class FamilySearchSessionClient {
     const query: Record<string, string | number | boolean> = {
       count: params.limit ?? 10,
       offset: params.offset ?? 0,
+      'm.defaultFacets': 'on',
+      'm.queryRequireDefault': 'on',
     };
     if (params.place) query['q.place'] = params.place;
-    if (params.keywords) query['q.keyword'] = params.keywords;
+    if (params.keywords) query['q.keywords'] = params.keywords;
     if (params.title) query['q.title'] = params.title;
     if (params.author) query['q.author'] = params.author;
     if (params.subject) query['q.subject'] = params.subject;
@@ -830,37 +824,6 @@ export class FamilySearchSessionClient {
     };
   }
 
-  async listFilmImages(params: {
-    dgs: string;
-    startImage?: number;
-    limit?: number;
-  }): Promise<FilmImageResult[]> {
-    const dgs = params.dgs.replace(/\D/g, '').padStart(9, '0');
-    if (!/^[0-9]{9}$/.test(dgs)) throw new FamilySearchSessionError('DGS must contain at most 9 digits.');
-    const startImage = Math.max(1, Math.trunc(params.startImage ?? 1));
-    const limit = Math.min(100, Math.max(1, Math.trunc(params.limit ?? 20)));
-    const results: FilmImageResult[] = [];
-
-    for (let imageNumber = startImage; imageNumber < startImage + limit; imageNumber++) {
-      const locator = `dgs:${dgs}_${String(imageNumber).padStart(5, '0')}`;
-      try {
-        const apid = await this.request<string>(`/das/v2/${locator}/name`, { namespace: 'apid' });
-        const normalizedApid = String(apid).replace(/^"|"$/g, '').trim();
-        if (!normalizedApid) break;
-        results.push({
-          imageNumber,
-          locator,
-          apid: normalizedApid,
-          arkUrl: `https://www.familysearch.org/ark:/61903/${locator}`,
-          thumbnailUrl: `https://www.familysearch.org/service/records/storage/deepzoomcloud/dz/v1/apid:${normalizedApid}/thumb_p200.jpg`,
-        });
-      } catch (error) {
-        if (error instanceof FamilySearchSessionError && (error.statusCode === 400 || error.statusCode === 404)) break;
-        throw error;
-      }
-    }
-    return results;
-  }
 }
 
 export interface PersonSummary {

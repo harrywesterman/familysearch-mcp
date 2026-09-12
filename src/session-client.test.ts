@@ -98,38 +98,17 @@ test('searchCatalog maps DGS searches and catalog metadata', async () => {
 
   try {
     const client = new FamilySearchSessionClient({ cookies: 'session=test', minIntervalMs: 0, maxRetries: 0 });
-    const result = await client.searchCatalog({ filmNumber: '008903222', limit: 2 });
+    const result = await client.searchCatalog({ filmNumber: '008903222', keywords: 'trouwregister', limit: 2 });
     const url = new URL(requestedUrl);
     assert.equal(url.pathname, '/service/search/catalog/v3/search');
     assert.equal(url.searchParams.get('q.filmNumber'), '8903222');
+    assert.equal(url.searchParams.get('q.keywords'), 'trouwregister');
+    assert.equal(url.searchParams.get('m.defaultFacets'), 'on');
+    assert.equal(url.searchParams.get('m.queryRequireDefault'), 'on');
     assert.equal(result.total, 1);
     assert.equal(result.entries[0]?.title, 'Test register');
     assert.equal(result.entries[0]?.url, 'https://www.familysearch.org/en/search/catalog/koha:123');
     assert.deepEqual(result.entries[0]?.coverage, ['Leeuwarden; 1600-1700']);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test('listFilmImages resolves one-based DGS image locators to APIDs', async () => {
-  const originalFetch = globalThis.fetch;
-  const requestedUrls: string[] = [];
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    requestedUrls.push(String(input));
-    return new Response(`TH-TEST-${requestedUrls.length}`, {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });
-  }) as typeof fetch;
-
-  try {
-    const client = new FamilySearchSessionClient({ cookies: 'session=test', minIntervalMs: 0, maxRetries: 0 });
-    const result = await client.listFilmImages({ dgs: '8903222', startImage: 517, limit: 2 });
-    assert.equal(requestedUrls.length, 2);
-    assert.match(requestedUrls[0] || '', /dgs:008903222_00517\/name/);
-    assert.equal(result[0]?.locator, 'dgs:008903222_00517');
-    assert.equal(result[1]?.imageNumber, 518);
-    assert.equal(result[0]?.apid, 'TH-TEST-1');
   } finally {
     globalThis.fetch = originalFetch;
   }

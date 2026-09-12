@@ -11,7 +11,7 @@ A local [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server 
 - **AI full-text search** — search OCR transcripts with OR, AND, or exact-phrase matching
 - **Catalog and film browsing** — find catalog items and resolve pages in a DGS image group
 - **High-resolution downloads** — download by ARK image ID or by DGS + image number
-- **Browser session auth** — log in once with Brave; no FamilySearch API key required
+- **Browser session auth** — log in once with Brave, Chrome, or Chromium; no FamilySearch API key required
 
 ## How it works
 
@@ -20,7 +20,7 @@ FamilySearch does not approve direct API access for most personal projects. This
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) 18+ and npm
-- [Brave browser](https://brave.com/download/) — Playwright's bundled Chromium is blocked by FamilySearch bot detection
+- Brave, Chrome, or Chromium (Brave is preferred where available)
 - A free FamilySearch account
 
 ## Installation
@@ -40,7 +40,7 @@ npm run build
 npm run login
 ```
 
-This opens Brave with a dedicated profile. Sign in when prompted. Your session is saved to `~/.familysearch-mcp/config.json`.
+This opens an installed browser with a dedicated profile. Sign in when prompted. Your session is saved to `~/.familysearch-mcp/config.json`.
 
 > **Tip:** You can also ask your AI assistant to run the `login-with-browser` tool after the MCP is connected.
 
@@ -188,7 +188,8 @@ If `node` is not found, use the full path to your Node executable. For clients t
 npm run login
 ```
 
-Opens Brave (not headless Chromium) to avoid FamilySearch bot detection.
+Opens Brave when available, otherwise Chrome or Chromium. Set
+`FAMILYSEARCH_BROWSER_PATH` to select a different browser executable.
 
 ### Option 2: Copy cookies manually
 
@@ -204,7 +205,7 @@ The full cookie string is required — bot protection cookies like `reese84` and
 
 | Tool | Description |
 |---|---|
-| `login-with-browser` | Open Brave, log in, and save session locally |
+| `login-with-browser` | Open an installed browser, log in, and save the session locally |
 | `set-session-cookie` | Authenticate by pasting cookies from your browser |
 | `get-current-user` | View your authenticated account info |
 | `search-persons` | Search individuals in the Family Tree (name, givenName/surname, dates, places, gender, limit/offset) |
@@ -214,7 +215,7 @@ The full cookie string is required — bot protection cookies like `reese84` and
 | `search-records` | Search historical record collections (date ranges, gender, limit/offset; returns the record `ark` link) |
 | `search-full-text` | Search FamilySearch AI-OCR transcripts of unindexed scans by keywords, name, place, years, DGS or collection |
 | `search-catalog` | Search the catalog by place, keywords, title, author, subject, surname, call number, film number, or DGS |
-| `list-film-images` | Resolve a range of one-based image numbers in a DGS to stable DGS locators and APIDs |
+| `list-film-images` | Resolve a range of one-based image numbers in a DGS to permanent `3:1` ARK image IDs |
 | `download-document` | Download a scan by ARK image ID or DGS + image number, without overwriting existing files |
 
 ### Example prompts
@@ -265,8 +266,7 @@ Download image 517 from DGS 008903222 as a high-resolution JPG
 
 Downloads are saved to `~/Downloads/familysearch-mcp` by default. The official
 FamilySearch viewer opens briefly while preparing the file. JPG downloads use the
-original scan resolution. Downloads addressed by DGS currently support original
-JPG; PDF downloads with or without highlights require a `3:1` ARK image ID.
+original scan resolution; PDF downloads are available with or without highlights.
 
 ---
 
@@ -277,7 +277,7 @@ JPG; PDF downloads with or without highlights require a `3:1` ARK image ID.
 | "Not authenticated" errors | Run `npm run login` or use `set-session-cookie` |
 | Session expired / 401 errors | Re-run `npm run login` |
 | "Request blocked by FamilySearch security (error 15)" | Re-run `npm run login` to refresh bot-protection cookies, then wait a few minutes before retrying. Repeated requests prolong the block |
-| Brave not found | Install [Brave](https://brave.com/download/) or set `BRAVE_PATH` to your Brave executable |
+| Browser not found | Install Brave, Chrome, or Chromium, or set `FAMILYSEARCH_BROWSER_PATH` to its executable |
 | MCP tools not appearing | Confirm `npm run build` succeeded and restart your MCP client |
 | `node` not found | Use the full path to your Node binary in the MCP config |
 
