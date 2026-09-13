@@ -286,13 +286,52 @@ original scan resolution; PDF downloads are available with or without highlights
 ## Rate limiting
 
 FamilySearch's security service blocks clients that issue requests too quickly
-(`error 15`). This server mitigates that by:
+(`error 15`). This server is deliberately conservative to avoid getting your IP
+address blocked. It:
 
-- throttling every request (default: at least ~1.1s between calls)
-- retrying transient failures (HTTP 429/5xx and network errors) with exponential backoff
+- spaces every API request out by **at least ~4 seconds**, plus random jitter so
+  the cadence is not perfectly regular
+- retries transient failures (HTTP 429/5xx and network errors) with slow,
+  jittered exponential backoff (starting at ~3s, capped at 60s)
+- honors the `Retry-After` header when FamilySearch sends one
+- enters a **15-minute cooldown** after a security block (error 15) or a
+  rate-limit response, during which all requests fail fast instead of hammering
+  the API
 
-Error 15 is a hard bot-protection block and is **not** retried automatically — if you
-see it, refresh your session with `npm run login` and wait a few minutes.
+Error 15 is a hard bot-protection block and is **not** retried automatically. If
+you see it, wait for the cooldown to finish, refresh your session with
+`npm run login`, and then retry.
+
+All values are configurable through environment variables in your MCP client
+config (values are milliseconds unless noted):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `FAMILYSEARCH_MIN_INTERVAL_MS` | `4000` | Minimum delay between requests |
+| `FAMILYSEARCH_JITTER_FACTOR` | `0.5` | Random extra delay as a fraction of the interval (0–1) |
+| `FAMILYSEARCH_MAX_RETRIES` | `2` | Retry attempts for transient failures |
+| `FAMILYSEARCH_BACKOFF_MS` | `3000` | Base delay for exponential backoff |
+| `FAMILYSEARCH_BACKOFF_MAX_MS` | `60000` | Maximum backoff delay |
+| `FAMILYSEARCH_COOLDOWN_MS` | `900000` | Pause after a block / rate limit (15 min) |
+
+To be extra gentle, raise the interval and cooldown, for example:
+
+```json
+{
+  "mcpServers": {
+    "familysearch": {
+      "command": "node",
+      "args": ["build/index.js"],
+      "cwd": "/path/to/familysearch-mcp",
+      "env": {
+        "FAMILYSEARCH_MIN_INTERVAL_MS": "8000",
+        "FAMILYSEARCH_COOLDOWN_MS": "1800000"
+      }
+    }
+  }
+}
+```
+
 
 ## Security
 

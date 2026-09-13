@@ -73,6 +73,66 @@ test('searchFullText maps filters and returns OCR metadata', async () => {
   }
 });
 
+test('enters a cooldown after an error 15 block and stops calling fetch', async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ errorCode: 15 }), {
+      status: 403,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const client = new FamilySearchSessionClient({
+      cookies: 'session=test',
+      minIntervalMs: 0,
+      maxRetries: 0,
+      cooldownMs: 60_000,
+    });
+    await assert.rejects(() => client.searchPersons({ surname: 'Smith' }), /error 15/i);
+    await assert.rejects(() => client.searchPersons({ surname: 'Smith' }), /Paused to avoid an IP block/i);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('honors the Retry-After header on retryable responses', async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  const start = Date.now();
+  globalThis.fetch = (async () => {
+    calls += 1;
+    if (calls === 1) {
+      return new Response(JSON.stringify({ message: 'slow down' }), {
+        status: 429,
+        headers: { 'content-type': 'application/json', 'retry-after': '1' },
+      });
+    }
+    return new Response(JSON.stringify({ entries: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const client = new FamilySearchSessionClient({
+      cookies: 'session=test',
+      minIntervalMs: 0,
+      maxRetries: 1,
+      cooldownMs: 0,
+    });
+    const result = await client.searchPersons({ surname: 'Smith' });
+    assert.deepEqual(result, []);
+    assert.equal(calls, 2);
+    assert.ok(Date.now() - start >= 900, 'expected to wait for the Retry-After delay');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('searchCatalog maps DGS searches and catalog metadata', async () => {
   const originalFetch = globalThis.fetch;
   let requestedUrl = '';

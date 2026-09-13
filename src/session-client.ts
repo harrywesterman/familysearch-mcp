@@ -245,6 +245,10 @@ export interface SessionClientOptions {
   cookies?: string;
   minIntervalMs?: number;
   maxRetries?: number;
+  jitterFactor?: number;
+  backoffBaseMs?: number;
+  backoffMaxMs?: number;
+  cooldownMs?: number;
 }
 
 const BROWSER_USER_AGENT =
@@ -264,8 +268,30 @@ const BROWSER_HEADERS: Record<string, string> = {
   'User-Agent': BROWSER_USER_AGENT,
 };
 
-const DEFAULT_MIN_INTERVAL_MS = 1100;
-const DEFAULT_MAX_RETRIES = 3;
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function envFloat(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+// Deliberately conservative defaults: FamilySearch blocks clients that issue
+// requests too quickly (error 15), so we space calls out and pause entirely
+// after a rate-limit/security signal. Every value can be tuned with the
+// FAMILYSEARCH_* environment variables.
+const DEFAULT_MIN_INTERVAL_MS = envInt('FAMILYSEARCH_MIN_INTERVAL_MS', 4000);
+const DEFAULT_MAX_RETRIES = envInt('FAMILYSEARCH_MAX_RETRIES', 2);
+const DEFAULT_JITTER_FACTOR = envFloat('FAMILYSEARCH_JITTER_FACTOR', 0.5);
+const DEFAULT_BACKOFF_BASE_MS = envInt('FAMILYSEARCH_BACKOFF_MS', 3000);
+const DEFAULT_BACKOFF_MAX_MS = envInt('FAMILYSEARCH_BACKOFF_MAX_MS', 60_000);
+const DEFAULT_COOLDOWN_MS = envInt('FAMILYSEARCH_COOLDOWN_MS', 15 * 60_000);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -297,13 +323,23 @@ export class FamilySearchSessionClient {
   private cookies: string;
   private minIntervalMs: number;
   private maxRetries: number;
+  private jitterFactor: number;
+  private backoffBaseMs: number;
+  private backoffMaxMs: number;
+  private cooldownMs: number;
   private lastRequestAt = 0;
   private throttleQueue: Promise<void> = Promise.resolve();
+  private cooldownUntil = 0;
+  private cooldownReason = '';
 
   constructor(options: SessionClientOptions) {
     this.cookies = options.cookies || buildCookieHeader(options.sessionId, options.fsAnid);
     this.minIntervalMs = options.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS;
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.jitterFactor = options.jitterFactor ?? DEFAULT_JITTER_FACTOR;
+    this.backoffBaseMs = options.backoffBaseMs ?? DEFAULT_BACKOFF_BASE_MS;
+    this.backoffMaxMs = options.backoffMaxMs ?? DEFAULT_BACKOFF_MAX_MS;
+    this.cooldownMs = options.cooldownMs ?? DEFAULT_COOLDOWN_MS;
   }
 
   isAuthenticated(): boolean {
@@ -327,7 +363,10 @@ export class FamilySearchSessionClient {
 
     await previous;
     try {
-      const wait = this.minIntervalMs - (Date.now() - this.lastRequestAt);
+      // Add jitter proportional to the configured interval so requests do not
+      // arrive at a perfectly regular, bot-like cadence.
+      const interval = this.minIntervalMs * (1 + this.jitterFactor * Math.random());
+      const wait = interval - (Date.now() - this.lastRequestAt);
       if (wait > 0) {
         await sleep(wait);
       }
@@ -338,13 +377,52 @@ export class FamilySearchSessionClient {
   }
 
   private backoffMs(attempt: number): number {
-    return Math.min(500 * 2 ** attempt, 8000);
+    const base = Math.min(this.backoffBaseMs * 2 ** attempt, this.backoffMaxMs);
+    return Math.round(base + base * 0.2 * Math.random());
+  }
+
+  private retryAfterMs(response: Response): number | null {
+    const header = response.headers.get('retry-after');
+    if (!header) return null;
+    const seconds = Number(header);
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+    const date = Date.parse(header);
+    return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+  }
+
+  private enterCooldown(ms: number, reason: string): void {
+    const until = Date.now() + ms;
+    if (until > this.cooldownUntil) {
+      this.cooldownUntil = until;
+      this.cooldownReason = reason;
+    }
+  }
+
+  private cooldownError(): FamilySearchSessionError | null {
+    if (this.cooldownUntil <= Date.now()) return null;
+    const remaining = Math.ceil((this.cooldownUntil - Date.now()) / 1000);
+    return new FamilySearchSessionError(
+      `Paused to avoid an IP block (${this.cooldownReason}); ${remaining}s remaining. ` +
+        'Wait for the cooldown to finish, then re-run login-with-browser if the session has expired.',
+      429,
+    );
+  }
+
+  private async pauseForRetry(response: Response | null, attempt: number, reason: string): Promise<void> {
+    const retryAfter = response ? this.retryAfterMs(response) : null;
+    if (retryAfter && retryAfter > 0) {
+      this.enterCooldown(retryAfter, reason);
+    }
+    await sleep(retryAfter ?? this.backoffMs(attempt));
   }
 
   private async request<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
     if (!this.cookies) {
       throw new FamilySearchSessionError('Not authenticated. Set a browser session cookie first.');
     }
+
+    const cooldown = this.cooldownError();
+    if (cooldown) throw cooldown;
 
     const url = new URL(path.startsWith('http') ? path : `${BASE_URL}${path}`);
     if (params) {
@@ -396,7 +474,7 @@ export class FamilySearchSessionClient {
           );
           if (isRetryableStatus(response.status) && attempt < this.maxRetries) {
             lastError = parseError;
-            await sleep(this.backoffMs(attempt));
+            await this.pauseForRetry(response, attempt, `HTTP ${response.status}`);
             continue;
           }
           throw parseError;
@@ -408,8 +486,9 @@ export class FamilySearchSessionClient {
       // mask the useful message. Error 15 is a hard bot-protection block: do not
       // retry it, as hammering only prolongs the block.
       if (hasErrorCode(data, '15')) {
+        this.enterCooldown(this.cooldownMs, 'security block (error 15)');
         throw new FamilySearchSessionError(
-          'Request blocked by FamilySearch security (error 15). Re-run login-with-browser to refresh cookies and wait a few minutes before retrying.',
+          'Request blocked by FamilySearch security (error 15). Pausing all requests for a while to avoid a longer IP block. Re-run login-with-browser to refresh cookies, then retry.',
           403,
         );
       }
@@ -427,7 +506,7 @@ export class FamilySearchSessionClient {
 
         if (isRetryableStatus(response.status) && attempt < this.maxRetries) {
           lastError = new FamilySearchSessionError(message, response.status);
-          await sleep(this.backoffMs(attempt));
+          await this.pauseForRetry(response, attempt, `HTTP ${response.status}`);
           continue;
         }
 
